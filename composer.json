@@ -1,5 +1,5 @@
 {
-    "name": "nicolasbeauvais/flysystem-onedrive",
+    "name": "doanhuuhoa1603/flysystem-onedrive",
     "description": "Flysystem Adapter for the OneDrive API",
     "keywords": [
         "flysystem-onedrive",
@@ -7,13 +7,12 @@
         "onedrive",
         "api"
     ],
-    "homepage": "https://github.com/nicolasbeauvais/flysystem-onedrive",
+    "homepage": "https://github.com/doanhuuhoa1603/flysystem-onedrive",
     "license": "MIT",
     "authors": [
         {
-            "name": "Nicolas Beauvais",
-            "email": "nicolasbeauvais1@gmail.com",
-            "homepage": "http://nicolas-beauvais.com",
+            "name": "Doan Huu Hoa",
+            "email": "doanhuuhoa1603@gmail.com",
             "role": "Developer"
         }
     ],
