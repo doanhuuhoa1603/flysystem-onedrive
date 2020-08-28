@@ -1,6 +1,6 @@
 <?php
 
-namespace NicolasBeauvais\FlysystemOneDrive;
+namespace DoanHuuHoa1603\FlysystemOneDrive;
 
 use ArrayObject;
 use Microsoft\Graph\Graph;
@@ -17,12 +17,12 @@ class OneDriveAdapter extends AbstractAdapter
 
     private $usePath;
 
-    public function __construct(Graph $graph, string $prefix = 'root', bool $usePath = true)
+    public function __construct(Graph $graph, $prefix = 'root', $base = '/drive/', $usePath = true)
     {
         $this->graph = $graph;
         $this->usePath = $usePath;
 
-        $this->setPathPrefix('/drive/'.$prefix.($this->usePath ? ':' : ''));
+        $this->setPathPrefix($base.$prefix.($this->usePath ? ':' : ''));
     }
 
     /**
@@ -73,11 +73,23 @@ class OneDriveAdapter extends AbstractAdapter
                     'name' => end($patch),
                     'parentReference' => [
                         'path' => $this->getPathPrefix().(empty($sliced) ? '' : rtrim($sliced, '/').'/'),
-                    ],
+                    ]
                 ])
                 ->execute();
         } catch (\Exception $e) {
-            return false;
+ 	    try {
+            $this->graph->createRequest('PATCH', $endpoint)
+                ->attachBody([
+                    'name' => end($patch),
+                    'parentReference' => [
+                        'path' => substr($this->getPathPrefix(), 3).(empty($sliced) ? '' : rtrim($sliced, '/').'/'),
+                    ]
+                ])
+                ->execute();
+
+ 	    } catch (\Exception $e){
+		return false;
+  	    } 
         }
 
         return true;
@@ -199,6 +211,7 @@ class OneDriveAdapter extends AbstractAdapter
                 ->download($file);
 
             $stream = fopen($file, 'r');
+            unlink($file);
         } catch (\Exception $e) {
             return false;
         }
@@ -217,8 +230,9 @@ class OneDriveAdapter extends AbstractAdapter
             $endpoint = $this->applyPathPrefix($directory).($this->usePath ? ':' : '').'/children';
         }
 
+        $results = [];
+        
         try {
-            $results = [];
             $response = $this->graph->createRequest('GET', $endpoint)->execute();
             $items = $response->getBody()['value'];
 
@@ -245,7 +259,11 @@ class OneDriveAdapter extends AbstractAdapter
      */
     public function getMetadata($path)
     {
-        $path = $this->applyPathPrefix($path);
+        if ($path === '' && $this->usePath) {
+            $path = str_replace(':/', '', $this->getPathPrefix()).'/children';
+        } else {
+            $path = $this->applyPathPrefix($path);
+	    }
 
         try {
             $response = $this->graph->createRequest('GET', $path)->execute();
@@ -303,30 +321,81 @@ class OneDriveAdapter extends AbstractAdapter
      */
     protected function upload(string $path, $contents)
     {
+        $filename = basename($path);
         $path = $this->applyPathPrefix($path);
 
         try {
             $contents = $stream = \GuzzleHttp\Psr7\stream_for($contents);
 
-            $response = $this->graph->createRequest('PUT', $path.($this->usePath ? ':' : '').'/content')
+            $file = $contents->getMetadata('uri');
+            $fileSize = fileSize($file);
+
+            if ($fileSize > 4000000) {
+                $uploadSession = $this->graph->createRequest("POST", $path.($this->usePath ? ':' : '')."/createUploadSession")
+                ->addHeaders(["Content-Type" => "application/json"])
+                ->attachBody([
+                    "item" => [
+                        "@microsoft.graph.conflictBehavior" => "rename",
+                        "name" => $filename
+                    ]
+                ])
+                ->setReturnType(Model\UploadSession::class)
+                ->execute();
+
+                $handle = fopen($file, 'r');
+                $fileNbByte = $fileSize - 1;
+                $chunkSize = 1024*1024*60;
+                $fgetsLength = $chunkSize + 1;
+                $start = 0;
+                while (!feof($handle)) {
+                    $bytes = fread($handle, $fgetsLength);
+                    $end = $chunkSize + $start;
+                    if ($end > $fileNbByte) {
+                        $end = $fileNbByte;
+                    }
+
+                    $stream = \GuzzleHttp\Psr7\stream_for($bytes);
+
+                    $response = $this->graph->createRequest("PUT", $uploadSession->getUploadUrl())
+                        ->addHeaders([
+                            'Content-Length' => ($end + 1) - $start,
+                            'Content-Range' => "bytes " . $start . "-" . $end . "/" . $fileSize
+                        ])
+                        ->setReturnType(Model\UploadSession::class)
+                        ->attachBody($stream)
+                        ->execute();
+                
+                    $start = $end + 1;
+                }
+
+                return $this->normalizeResponse($response->getProperties(), $path);
+
+            } else {
+                $response = $this->graph->createRequest('PUT', $path.($this->usePath ? ':' : '').'/content')
                 ->attachBody($contents)
                 ->execute();
+
+                return $this->normalizeResponse($response->getBody(), $path);
+            }
+            
+       
         } catch (\Exception $e) {
             return false;
         }
-
-        return $this->normalizeResponse($response->getBody(), $path);
+        
     }
 
     protected function normalizeResponse(array $response, string $path): array
     {
+	$path = str_replace("root/children","root:/children", $path);
         $path = trim($this->removePathPrefix($path), '/');
 
         return [
             'path' => empty($path) ? $response['name'] : $path.'/'.$response['name'],
-            'timestamp' => strtotime($response['lastModifiedDateTime']),
-            'size' => $response['size'],
-            'bytes' => $response['size'],
+	        'name' => isset($response['name']) ? $response['name'] : null,
+            'timestamp' => isset($response['lastModifiedDateTime']) ? strtotime($response['lastModifiedDateTime']) : null,
+            'size' => isset($response['size']) ? $response['size'] : null,
+            'bytes' => isset($response['size']) ? $response['size'] : null,
             'type' => isset($response['file']) ? 'file' : 'dir',
             'mimetype' => isset($response['file']) ? $response['file']['mimeType'] : null,
             'link' => isset($response['webUrl']) ? $response['webUrl'] : null,
